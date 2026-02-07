@@ -4,6 +4,7 @@ import { useIsMobile } from "@/hooks/useMobile";
 import Chat from "@/pages/Chat";
 import DesktopOnly from "@/pages/DesktopOnly";
 import Home from "@/pages/Home";
+import Messages from "@/pages/Messages";
 import NotFound from "@/pages/NotFound";
 import QrPage from "@/pages/QrPage";
 import { Route, Switch } from "wouter";
@@ -11,7 +12,9 @@ import { Route, Switch } from "wouter";
 function Router() {
   return (
     <Switch>
-      <Route path="/" component={Home} />
+      <Route path="/" component={Messages} />
+      <Route path="/messages" component={Messages} />
+      <Route path="/home" component={Home} />
       <Route path="/chat" component={Chat} />
       <Route path="/qr/:code" component={QrPage} />
       <Route component={NotFound} />

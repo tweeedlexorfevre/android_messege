@@ -1,4 +1,4 @@
-import "dotenv/config";
+import dotenv from "dotenv";
 import express from "express";
 import { createServer } from "http";
 import path from "path";
@@ -8,6 +8,9 @@ import { OnayClient, loadOnayConfig } from "./onayClient";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Load .env from project root
+dotenv.config({ path: path.resolve(__dirname, "..", ".env") });
 
 let onayClient: OnayClient | null = null;
 

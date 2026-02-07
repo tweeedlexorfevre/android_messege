@@ -64,6 +64,10 @@ export default function Home() {
     setLocation("/chat?mode=api&platform=android");
   };
 
+  const goMessages = () => {
+    setLocation("/messages");
+  };
+
   const handleOnayFetch = async () => {
     if (!terminal.trim()) {
       toast.error("Введите код терминала");
@@ -128,6 +132,14 @@ export default function Home() {
         </div>
 
         <div className="space-y-4">
+          <div className="bg-[#111112] border border-[#1f1f21] rounded-2xl p-4 flex items-center justify-between">
+            <div className="space-y-1">
+              <div className="text-lg font-semibold">Все сообщения</div>
+              <div className="text-sm text-gray-400">Макет списка входящих</div>
+            </div>
+            <Button onClick={goMessages} className="h-10 px-4 text-sm font-semibold">Открыть</Button>
+          </div>
+
           <div className="bg-[#111112] border border-[#1f1f21] rounded-2xl p-4 flex items-center justify-between">
             <div className="space-y-1">
               <div className="text-lg font-semibold">9909</div>

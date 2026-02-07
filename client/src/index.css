@@ -31,7 +31,7 @@
   --color-ios-header: var(--ios-header);
   --color-ios-separator: var(--ios-separator);
 
-  --font-sans: -apple-system, BlinkMacSystemFont, "San Francisco", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-sans: "Google Sans", "Roboto", "Noto Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
 }
 
 :root {

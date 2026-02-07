@@ -12,7 +12,7 @@ export function ChatHeader({ title, subTitle, badge }: ChatHeaderProps) {
   return (
     <header className="fixed top-0 left-0 right-0 z-50 safe-area-top">
       <div className="h-[44px] flex items-center justify-between px-2 w-full max-w-md mx-auto">
-        <Link href="/" className="flex items-center active:opacity-50 transition-opacity ">
+        <Link href="/messages" className="flex items-center active:opacity-50 transition-opacity ">
           <div className="w-13 h-13 rounded-full  flex items-center justify-center ios-blur border border-white/20 mt-10 ml-2 pr-1">
             <ChevronLeft size={37 } strokeWidth={3} className="text-white" />
           </div>

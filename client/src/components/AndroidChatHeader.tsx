@@ -10,7 +10,7 @@ export function AndroidChatHeader({ title }: AndroidChatHeaderProps) {
     <header className="fixed top-0 left-0 right-0 z-50 safe-area-top bg-[#1B1E24]">
       <div className="h-[56px] flex items-center px-3 gap-3 w-full max-w-md mx-auto">
         <Link
-          href="/"
+          href="/messages"
           className="p-2 -ml-2 text-[#D4D7DE] active:opacity-70 transition-opacity"
           aria-label="Назад"
         >
