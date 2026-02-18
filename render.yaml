@@ -4,6 +4,7 @@ services:
     env: node
     plan: free
     region: oregon
+    healthCheckPath: /healthz
     buildCommand: "corepack enable && pnpm install --frozen-lockfile=false --prod=false && pnpm build"
     startCommand: "pnpm start"
     envVars:
@@ -31,5 +32,25 @@ services:
         value: "1"
       - key: ONAY_VERBOSE_LOGS
         value: "false"
+      - key: ONAY_REQUEST_TIMEOUT_MS
+        value: "15000"
+      - key: ONAY_PAN_CACHE_TTL_MS
+        value: "300000"
+      - key: ONAY_KEEPALIVE_MSECS
+        value: "1000"
+      - key: ONAY_MAX_SOCKETS
+        value: "50"
+      - key: SERVER_KEEPALIVE_TIMEOUT_MS
+        value: "65000"
+      - key: SERVER_HEADERS_TIMEOUT_MS
+        value: "70000"
+      - key: SERVER_REQUEST_TIMEOUT_MS
+        value: "30000"
+      - key: SLOW_REQUEST_MS
+        value: "1000"
+      - key: PERF_LOGS
+        value: "true"
+      - key: PERF_INTERVAL_MS
+        value: "60000"
       - key: PUBLIC_BASE_URL
         value: "https://android-messege.onrender.com"

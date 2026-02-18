@@ -3,6 +3,7 @@ import { AndroidMessageBubble } from "@/components/AndroidMessageBubble";
 import { ChatHeader } from "@/components/ChatHeader";
 import { MessageBubble } from "@/components/MessageBubble";
 import { useChat, type Message as ChatMessage } from "@/contexts/ChatContext";
+import { fetchWithRetry } from "@/lib/fetchWithRetry";
 import { Plus, Mic, Smile, Image } from "lucide-react";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { format } from "date-fns";
@@ -10,28 +11,6 @@ import { format } from "date-fns";
 const API_STORAGE_KEY = "ios_msg_history_api";
 const API_BASE = (import.meta.env.VITE_API_BASE || "").replace(/\/+$/, "");
 const apiUrl = (path: string) => `${API_BASE}${path}`;
-
-async function fetchWithRetry(path: string, init: RequestInit, attempts = 3, delayMs = 3000) {
-  let lastError: unknown;
-  for (let i = 0; i < attempts; i++) {
-    try {
-      const resp = await fetch(apiUrl(path), init);
-      if (resp.status >= 500 && i < attempts - 1) {
-        await new Promise((res) => setTimeout(res, delayMs));
-        continue;
-      }
-      return resp;
-    } catch (err) {
-      lastError = err;
-      if (i < attempts - 1) {
-        await new Promise((res) => setTimeout(res, delayMs));
-        continue;
-      }
-      throw err;
-    }
-  }
-  throw lastError ?? new Error("Failed to fetch");
-}
 
 export default function Chat() {
   const { settings, messages, sendMessage } = useChat();
@@ -144,14 +123,13 @@ export default function Chat() {
 
     try {
       const resp = await fetchWithRetry(
-        "/api/onay/qr-start",
+        apiUrl("/api/onay/qr-start"),
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ terminal: text }),
         },
-        3,
-        3000
+        { attempts: 2, delayMs: 1500 }
       );
 
       let body: any = null;

@@ -1,4 +1,6 @@
-import axios, { AxiosError, AxiosInstance } from "axios";
+import http from "node:http";
+import https from "node:https";
+import axios, { AxiosInstance } from "axios";
 
 type TokenBundle = {
   token: string;
@@ -18,6 +20,10 @@ export type OnayConfig = {
   pushToken: string;
   cityId: string;
   verbose: boolean;
+  requestTimeoutMs: number;
+  panCacheTtlMs: number;
+  keepAliveMsecs: number;
+  maxSockets: number;
 };
 
 export type OnayTrip = {
@@ -31,6 +37,12 @@ export type OnayTrip = {
 };
 
 const defaultBaseUrl = "https://nwqsr0rz5earuiy2t8z8.tha.kz";
+
+const parsePositiveInt = (value: string | undefined, fallback: number) => {
+  if (!value) return fallback;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
 
 const isAuthError = (error: unknown) => {
   if (!axios.isAxiosError(error)) return false;
@@ -70,17 +82,35 @@ export function loadOnayConfig(): OnayConfig {
     pushToken: required("ONAY_PUSH_TOKEN"),
     cityId: process.env.ONAY_CITY_ID || "1",
     verbose: process.env.ONAY_VERBOSE_LOGS === "true",
+    requestTimeoutMs: parsePositiveInt(
+      process.env.ONAY_REQUEST_TIMEOUT_MS,
+      15000,
+    ),
+    panCacheTtlMs: parsePositiveInt(process.env.ONAY_PAN_CACHE_TTL_MS, 300000),
+    keepAliveMsecs: parsePositiveInt(process.env.ONAY_KEEPALIVE_MSECS, 1000),
+    maxSockets: parsePositiveInt(process.env.ONAY_MAX_SOCKETS, 50),
   };
 }
 
 export class OnayClient {
   private http: AxiosInstance;
   private tokens?: TokenBundle;
+  private panCache?: { pan: string; expiresAt: number };
 
   constructor(private config: OnayConfig) {
+    const agentConfig = {
+      keepAlive: true,
+      keepAliveMsecs: config.keepAliveMsecs,
+      maxSockets: config.maxSockets,
+      maxFreeSockets: Math.max(10, Math.floor(config.maxSockets / 2)),
+      timeout: config.requestTimeoutMs,
+    };
+
     this.http = axios.create({
       baseURL: config.baseUrl,
-      timeout: 15000,
+      timeout: config.requestTimeoutMs,
+      httpAgent: new http.Agent(agentConfig),
+      httpsAgent: new https.Agent(agentConfig),
       headers: {
         "x-ma-os": config.os,
         "x-ma-version": config.version,
@@ -126,11 +156,15 @@ export class OnayClient {
       device: mask(this.config.deviceId),
     });
 
+    const startedAt = process.hrtime.bigint();
     const { data } = await this.http.put(
       "/v1/external/user/sign-in",
       payload,
       { headers },
     );
+    this.log("sign-in latency", {
+      ms: Number(process.hrtime.bigint() - startedAt) / 1_000_000,
+    });
 
     const tokenData = data?.result?.data;
 
@@ -145,6 +179,7 @@ export class OnayClient {
     };
 
     this.log("sign-in success", { device: mask(this.tokens.deviceId) });
+    this.panCache = undefined;
     return this.tokens;
   }
 
@@ -156,18 +191,37 @@ export class OnayClient {
     return {
       "content-type": "application/json",
       "x-short-token": this.tokens.shortToken,
-      "x-ma-d": this.config.deviceId,
+      "x-ma-d": this.tokens.deviceId || this.config.deviceId,
       "x-ma-version": this.config.version,
       "user-agent": this.config.userAgent,
     };
   }
 
+  private getCachedPan() {
+    if (!this.panCache) return undefined;
+    if (this.panCache.expiresAt <= Date.now()) {
+      this.panCache = undefined;
+      return undefined;
+    }
+    return this.panCache.pan;
+  }
+
   private async getFirstPan(): Promise<string> {
+    const cachedPan = this.getCachedPan();
+    if (cachedPan) {
+      this.log("pan cache hit", { pan: mask(String(cachedPan)) });
+      return cachedPan;
+    }
+
     await this.signIn();
 
     const headers = this.requireToken();
     const url = `/v2/external/customer/cards?cityId=${this.config.cityId}`;
+    const startedAt = process.hrtime.bigint();
     const { data } = await this.http.get(url, { headers });
+    this.log("cards latency", {
+      ms: Number(process.hrtime.bigint() - startedAt) / 1_000_000,
+    });
 
     if (!data?.success) {
       throw new Error("Onay cards call failed");
@@ -183,8 +237,13 @@ export class OnayClient {
       throw new Error("Onay: first card has no PAN");
     }
 
+    this.panCache = {
+      pan: String(pan),
+      expiresAt: Date.now() + this.config.panCacheTtlMs,
+    };
+
     this.log("pan retrieved", { pan: mask(String(pan)) });
-    return pan;
+    return String(pan);
   }
 
   private normalizeTrip(data: any, pan?: string): OnayTrip {
@@ -201,22 +260,26 @@ export class OnayClient {
   }
 
   async qrStart(terminal: string): Promise<OnayTrip> {
-    if (!terminal.trim()) {
+    const normalizedTerminal = terminal.trim();
+    if (!normalizedTerminal) {
       throw new Error("Terminal code is required");
     }
 
-    const pan = await this.getFirstPan();
-
     const attempt = async (forced: boolean) => {
       if (forced) await this.signIn(true);
+      const pan = await this.getFirstPan();
       const headers = this.requireToken();
-      const payload = { terminal: terminal.trim(), pan };
-      this.log("qr-start request", { terminal: terminal.trim() });
+      const payload = { terminal: normalizedTerminal, pan };
+      this.log("qr-start request", { terminal: normalizedTerminal });
+      const startedAt = process.hrtime.bigint();
       const { data } = await this.http.put(
         "/v1/external/customer/card/acquiring/qr/start",
         payload,
         { headers },
       );
+      this.log("qr-start latency", {
+        ms: Number(process.hrtime.bigint() - startedAt) / 1_000_000,
+      });
       this.log("qr-start success");
       return this.normalizeTrip(data, pan);
     };

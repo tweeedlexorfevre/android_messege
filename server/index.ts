@@ -1,6 +1,9 @@
+import axios from "axios";
+import compression from "compression";
 import dotenv from "dotenv";
 import express from "express";
 import { createServer } from "http";
+import { monitorEventLoopDelay } from "perf_hooks";
 import path from "path";
 import swaggerUi from "swagger-ui-express";
 import { fileURLToPath } from "url";
@@ -14,6 +17,42 @@ dotenv.config({ path: path.resolve(__dirname, "..", ".env") });
 
 let onayClient: OnayClient | null = null;
 
+const parsePositiveInt = (value: string | undefined, fallback: number) => {
+  if (!value) return fallback;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
+
+const toMb = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+
+const resolveOnayError = (error: unknown) => {
+  if (axios.isAxiosError(error)) {
+    const timeoutMs = error.config?.timeout;
+    if (error.code === "ECONNABORTED" || /timeout/i.test(error.message)) {
+      return {
+        status: 504,
+        message: `Onay upstream timeout${timeoutMs ? ` after ${timeoutMs}ms` : ""}`,
+      };
+    }
+
+    const upstreamStatus = error.response?.status;
+    if (typeof upstreamStatus === "number") {
+      return {
+        status: 502,
+        message: `Onay upstream responded with status ${upstreamStatus}`,
+      };
+    }
+
+    return { status: 502, message: "Onay upstream network error" };
+  }
+
+  if (error instanceof Error) {
+    return { status: 500, message: error.message };
+  }
+
+  return { status: 500, message: "Unexpected Onay error" };
+};
+
 const getOnayClient = () => {
   if (!onayClient) {
     onayClient = new OnayClient(loadOnayConfig());
@@ -24,8 +63,12 @@ const getOnayClient = () => {
 async function startServer() {
   const app = express();
   const server = createServer(app);
+  const shouldLogEveryRequest = process.env.HTTP_LOG_EVERY_REQUEST === "true";
+  const slowRequestMs = parsePositiveInt(process.env.SLOW_REQUEST_MS, 1000);
+  const perfLogsEnabled = process.env.PERF_LOGS !== "false";
 
   app.use(express.json());
+  app.use(compression());
 
   // Allow cross-origin calls from deployed frontend (Netlify) to Render
   app.use((req, res, next) => {
@@ -51,6 +94,38 @@ async function startServer() {
       res.status(400).send("Bad request");
     }
   });
+
+  // Request duration logging to track slow endpoints in production.
+  app.use((req, res, next) => {
+    const startedAt = process.hrtime.bigint();
+    res.on("finish", () => {
+      const durationMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
+      const isSlow = durationMs >= slowRequestMs;
+      if (shouldLogEveryRequest || isSlow || res.statusCode >= 500) {
+        console.log(
+          `[http] ${req.method} ${req.originalUrl} ${res.statusCode} ${durationMs.toFixed(1)}ms`,
+        );
+      }
+    });
+    next();
+  });
+
+  if (perfLogsEnabled) {
+    const perfIntervalMs = parsePositiveInt(process.env.PERF_INTERVAL_MS, 60000);
+    const loopDelay = monitorEventLoopDelay({ resolution: 20 });
+    loopDelay.enable();
+
+    setInterval(() => {
+      const memory = process.memoryUsage();
+      const lagMeanMs = loopDelay.mean / 1_000_000;
+      const lagP99Ms = loopDelay.percentile(99) / 1_000_000;
+      const lagMaxMs = loopDelay.max / 1_000_000;
+      console.log(
+        `[perf] rss=${toMb(memory.rss)} heapUsed=${toMb(memory.heapUsed)} eventLoopLagMean=${lagMeanMs.toFixed(2)}ms eventLoopLagP99=${lagP99Ms.toFixed(2)}ms eventLoopLagMax=${lagMaxMs.toFixed(2)}ms`,
+      );
+      loopDelay.reset();
+    }, perfIntervalMs).unref();
+  }
 
   const docs = {
     openapi: "3.0.1",
@@ -104,6 +179,7 @@ async function startServer() {
               },
             },
             400: { description: "Не указан terminal" },
+            504: { description: "Таймаут внешнего Onay API" },
             500: { description: "Ошибка Onay" },
           },
         },
@@ -133,6 +209,7 @@ async function startServer() {
                 },
               },
             },
+            504: { description: "Таймаут внешнего Onay API" },
             500: { description: "Ошибка Onay" },
           },
         },
@@ -142,6 +219,9 @@ async function startServer() {
 
   app.use("/docs", swaggerUi.serve, swaggerUi.setup(docs));
   app.get("/docs.json", (_req, res) => res.json(docs));
+  app.get("/healthz", (_req, res) =>
+    res.json({ success: true, uptimeSec: Math.floor(process.uptime()) }),
+  );
 
   app.post("/api/onay/qr-start", async (req, res) => {
     const terminal = String(req.body?.terminal || "").trim();
@@ -167,9 +247,7 @@ async function startServer() {
         },
       });
     } catch (error) {
-      const status = 500;
-      const message =
-        error instanceof Error ? error.message : "Unexpected Onay error";
+      const { status, message } = resolveOnayError(error);
       console.error("/api/onay/qr-start failed", message);
       return res.status(status).json({ success: false, message });
     }
@@ -189,9 +267,7 @@ async function startServer() {
         },
       });
     } catch (error) {
-      const status = 500;
-      const message =
-        error instanceof Error ? error.message : "Unexpected Onay error";
+      const { status, message } = resolveOnayError(error);
       console.error("/api/onay/sign-in failed", message);
       return res.status(status).json({ success: false, message });
     }
@@ -211,9 +287,28 @@ async function startServer() {
   });
 
   const port = process.env.PORT || 3000;
+  const keepAliveTimeoutMs = parsePositiveInt(
+    process.env.SERVER_KEEPALIVE_TIMEOUT_MS,
+    65000,
+  );
+  const headersTimeoutMs = parsePositiveInt(
+    process.env.SERVER_HEADERS_TIMEOUT_MS,
+    keepAliveTimeoutMs + 5000,
+  );
+  const requestTimeoutMs = parsePositiveInt(
+    process.env.SERVER_REQUEST_TIMEOUT_MS,
+    30000,
+  );
+
+  server.keepAliveTimeout = keepAliveTimeoutMs;
+  server.headersTimeout = headersTimeoutMs;
+  server.requestTimeout = requestTimeoutMs;
 
   server.listen(port, () => {
     console.log(`Server running on http://localhost:${port}/`);
+    console.log(
+      `[config] onayBaseUrl=${process.env.ONAY_BASE_URL || "default"} timeoutMs=${process.env.ONAY_REQUEST_TIMEOUT_MS || "15000"} keepAliveTimeoutMs=${keepAliveTimeoutMs}`,
+    );
   });
 }
 

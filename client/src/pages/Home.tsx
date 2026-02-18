@@ -1,34 +1,13 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useChat } from "@/contexts/ChatContext";
+import { fetchWithRetry } from "@/lib/fetchWithRetry";
 import { useState } from "react";
 import { useLocation } from "wouter";
 import { toast } from "sonner";
 
 const API_BASE = (import.meta.env.VITE_API_BASE || "").replace(/\/+$/, "");
 const apiUrl = (path: string) => `${API_BASE}${path}`;
-
-async function fetchWithRetry(path: string, init: RequestInit, attempts = 3, delayMs = 3000) {
-  let lastError: unknown;
-  for (let i = 0; i < attempts; i++) {
-    try {
-      const resp = await fetch(apiUrl(path), init);
-      if (resp.status >= 500 && i < attempts - 1) {
-        await new Promise((res) => setTimeout(res, delayMs));
-        continue;
-      }
-      return resp;
-    } catch (err) {
-      lastError = err;
-      if (i < attempts - 1) {
-        await new Promise((res) => setTimeout(res, delayMs));
-        continue;
-      }
-      throw err;
-    }
-  }
-  throw lastError ?? new Error("Failed to fetch");
-}
 
 export default function Home() {
   const { settings, updateSettings, clearHistory } = useChat();
@@ -77,14 +56,13 @@ export default function Home() {
     setLoadingOnay(true);
     try {
       const response = await fetchWithRetry(
-        "/api/onay/qr-start",
+        apiUrl("/api/onay/qr-start"),
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ terminal: terminal.trim() }),
         },
-        3,
-        3000
+        { attempts: 2, delayMs: 1500 }
       );
 
       const body = await response.json();
